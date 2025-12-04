@@ -6,8 +6,9 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import scala.Tuple2;
 
-import java.io.File;
-import java.io.Serializable;
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -30,41 +31,51 @@ public class SparkMain implements Serializable {
             System.out.println("INFORMATION RETRIEVAL SYSTEM");
             System.out.println("=".repeat(80));
             
-            // Part 1: Build Positional Index using Spark
+            // Part 1: Build Positional Index using Spark and save to output file
             System.out.println("\nPART 1: POSITIONAL INDEX");
             System.out.println("-".repeat(50));
             JavaPairRDD<String, Map<String, List<Integer>>> positionalIndexRDD = buildPositionalIndexWithSpark(sc);
             Map<String, Map<String, List<Integer>>> positionalIndex = positionalIndexRDD.collectAsMap();
+            
+            // Save positional index to output file
+            String outputFileName = "positional_index_output.txt";
+            savePositionalIndexToFile(positionalIndex, outputFileName);
             displayPositionalIndex(positionalIndex);
             
-            // Part 2: Compute Term Frequencies, IDF, and TF-IDF using Spark
+            System.out.println("\n✅ Part 1 completed. Output saved to: " + outputFileName);
+            
+            // Part 2: Use the Spark App output file from Part 1
             System.out.println("\nPART 2: TERM FREQUENCY ANALYSIS");
             System.out.println("-".repeat(50));
+            System.out.println("Using the Spark App output file from the First part.\n");
             
-            // Get all documents and terms
+            // Load positional index from the output file created in Part 1
+            Map<String, Map<String, List<Integer>>> loadedPositionalIndex = loadPositionalIndexFromFile(outputFileName);
+            
+            // Get all documents and terms from loaded data
             List<String> allDocs = getDocumentList();
-            Set<String> allTerms = getAllTerms(positionalIndex);
+            Set<String> allTerms = getAllTerms(loadedPositionalIndex);
             
-            // Compute TF-IDF using Spark RDDs
-            JavaPairRDD<String, Map<String, Double>> tfidfRDD = computeTFIDFWithSpark(sc, positionalIndex, allDocs, allTerms);
-            Map<String, Map<String, Double>> tfidfMatrix = tfidfRDD.collectAsMap();
-            
-            // Display results
-            Map<String, Map<String, Integer>> tfMatrix = computeTermFrequency(positionalIndex, allDocs, allTerms);
+            // 2.1 Compute and display Term Frequency Matrix
+            Map<String, Map<String, Integer>> tfMatrix = computeTermFrequency(loadedPositionalIndex, allDocs, allTerms);
             displayTermFrequencyMatrix(tfMatrix, allDocs, allTerms);
             
-            Map<String, Double> idfValues = computeIDF(positionalIndex, allDocs.size());
+            // 2.2 Compute and display IDF values
+            Map<String, Double> idfValues = computeIDF(loadedPositionalIndex, allDocs.size());
             displayIDFValues(idfValues);
             
+            // 2.3 Compute TF-IDF using Spark RDDs with loaded data
+            JavaPairRDD<String, Map<String, Double>> tfidfRDD = computeTFIDFWithSpark(sc, loadedPositionalIndex, allDocs, allTerms);
+            Map<String, Map<String, Double>> tfidfMatrix = tfidfRDD.collectAsMap();
             displayTFIDFMatrix(tfidfMatrix, allDocs, allTerms);
             
-            // Part 3: Query Processing with Spark
-            System.out.println("\nPART 3: QUERY PROCESSING");
+            // 2.4 Query Processing with phrase queries and boolean operators
+            System.out.println("\nPART 2.4: QUERY PROCESSING WITH BOOLEAN OPERATORS");
             System.out.println("-".repeat(50));
             
-            processQueryWithSpark(sc, "mercy AND caeser", positionalIndex, tfidfMatrix, allDocs);
-            processQueryWithSpark(sc, "brutus AND NOT mercy", positionalIndex, tfidfMatrix, allDocs);
-            processQueryWithSpark(sc, "angels AND fools", positionalIndex, tfidfMatrix, allDocs);
+            processQueryWithSpark(sc, "mercy AND caeser", loadedPositionalIndex, tfidfMatrix, allDocs);
+            processQueryWithSpark(sc, "brutus AND NOT mercy", loadedPositionalIndex, tfidfMatrix, allDocs);
+            processQueryWithSpark(sc, "angels AND fools", loadedPositionalIndex, tfidfMatrix, allDocs);
             
         } finally {
             sc.close();
@@ -377,5 +388,116 @@ public class SparkMain implements Serializable {
             return new HashSet<>(positionalIndex.get(term).keySet());
         }
         return new HashSet<>();
+    }
+    
+    // File I/O Methods for Part 1 -> Part 2 workflow
+    
+    private static void savePositionalIndexToFile(Map<String, Map<String, List<Integer>>> positionalIndex, 
+                                                  String fileName) {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(fileName))) {
+            writer.println("=== SPARK APP OUTPUT FILE - POSITIONAL INDEX ===");
+            writer.println("Generated by Part 1 of Information Retrieval System");
+            writer.println("Format: <term doc1: position1, position2... doc2: position1, position2... etc.>");
+            writer.println();
+            
+            // Sort terms alphabetically for consistent output
+            positionalIndex.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(entry -> {
+                        String term = entry.getKey();
+                        writer.print("<" + term + " ");
+                        
+                        // Sort documents numerically
+                        entry.getValue().entrySet().stream()
+                                .sorted((e1, e2) -> Integer.compare(Integer.parseInt(e1.getKey()), Integer.parseInt(e2.getKey())))
+                                .forEach(docEntry -> {
+                                    String docId = docEntry.getKey();
+                                    List<Integer> positions = docEntry.getValue();
+                                    writer.print("doc" + docId + ": " + 
+                                            positions.stream()
+                                                    .map(String::valueOf)
+                                                    .collect(Collectors.joining(", ")) + " ");
+                                });
+                        
+                        writer.println(">");
+                    });
+                    
+            writer.println();
+            writer.println("=== END OF POSITIONAL INDEX OUTPUT ===");
+            
+        } catch (IOException e) {
+            throw new RuntimeException("Error writing positional index to file: " + fileName, e);
+        }
+    }
+    
+    private static Map<String, Map<String, List<Integer>>> loadPositionalIndexFromFile(String fileName) {
+        Map<String, Map<String, List<Integer>>> positionalIndex = new HashMap<>();
+        
+        try {
+            List<String> lines = Files.readAllLines(Paths.get(fileName));
+            
+            for (String line : lines) {
+                line = line.trim();
+                if (line.startsWith("<") && line.endsWith(">")) {
+                    // Parse line like: <angels doc7: 1 doc8: 1 doc9: 1 >
+                    String content = line.substring(1, line.length() - 1).trim();
+                    
+                    // Find the first space to separate term from documents
+                    int firstSpace = content.indexOf(' ');
+                    if (firstSpace > 0) {
+                        String term = content.substring(0, firstSpace);
+                        String docsString = content.substring(firstSpace + 1);
+                        
+                        Map<String, List<Integer>> termDocs = new HashMap<>();
+                        
+                        // Split by "doc" to get document entries
+                        String[] docParts = docsString.split("\\s+doc");
+                        
+                        for (String docPart : docParts) {
+                            if (docPart.trim().isEmpty()) continue;
+                            
+                            // Handle the case where the first part doesn't have "doc" prefix
+                            if (!docPart.contains(":")) {
+                                continue;
+                            }
+                            
+                            String[] parts = docPart.split(":");
+                            if (parts.length == 2) {
+                                String docId = parts[0].trim();
+                                String positionsStr = parts[1].trim();
+                                
+                                List<Integer> positions = new ArrayList<>();
+                                if (!positionsStr.isEmpty()) {
+                                    String[] posArray = positionsStr.split(",");
+                                    for (String pos : posArray) {
+                                        try {
+                                            String cleanPos = pos.trim().replaceAll("[^0-9]", "");
+                                            if (!cleanPos.isEmpty()) {
+                                                positions.add(Integer.parseInt(cleanPos));
+                                            }
+                                        } catch (NumberFormatException e) {
+                                            // Skip invalid positions
+                                        }
+                                    }
+                                }
+                                
+                                if (!positions.isEmpty()) {
+                                    termDocs.put(docId, positions);
+                                }
+                            }
+                        }
+                        
+                        if (!termDocs.isEmpty()) {
+                            positionalIndex.put(term, termDocs);
+                        }
+                    }
+                }
+            }
+            
+        } catch (IOException e) {
+            throw new RuntimeException("Error reading positional index from file: " + fileName, e);
+        }
+        
+        return positionalIndex;
     }
 }
