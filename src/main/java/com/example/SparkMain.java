@@ -27,18 +27,18 @@ public class SparkMain implements Serializable {
         
         try {
             System.out.println("=".repeat(80));
-            System.out.println("INFORMATION RETRIEVAL SYSTEM USING APACHE SPARK");
+            System.out.println("INFORMATION RETRIEVAL SYSTEM");
             System.out.println("=".repeat(80));
             
             // Part 1: Build Positional Index using Spark
-            System.out.println("\nPART 1: POSITIONAL INDEX (Using Spark RDDs)");
+            System.out.println("\nPART 1: POSITIONAL INDEX");
             System.out.println("-".repeat(50));
             JavaPairRDD<String, Map<String, List<Integer>>> positionalIndexRDD = buildPositionalIndexWithSpark(sc);
             Map<String, Map<String, List<Integer>>> positionalIndex = positionalIndexRDD.collectAsMap();
             displayPositionalIndex(positionalIndex);
             
             // Part 2: Compute Term Frequencies, IDF, and TF-IDF using Spark
-            System.out.println("\nPART 2: TERM FREQUENCY ANALYSIS (Using Spark)");
+            System.out.println("\nPART 2: TERM FREQUENCY ANALYSIS");
             System.out.println("-".repeat(50));
             
             // Get all documents and terms
@@ -59,7 +59,7 @@ public class SparkMain implements Serializable {
             displayTFIDFMatrix(tfidfMatrix, allDocs, allTerms);
             
             // Part 3: Query Processing with Spark
-            System.out.println("\nPART 3: QUERY PROCESSING (Using Spark)");
+            System.out.println("\nPART 3: QUERY PROCESSING");
             System.out.println("-".repeat(50));
             
             processQueryWithSpark(sc, "mercy AND caeser", positionalIndex, tfidfMatrix, allDocs);
@@ -92,23 +92,29 @@ public class SparkMain implements Serializable {
         JavaPairRDD<String, Tuple2<String, List<Integer>>> termDocPositionsRDD = filePathsRDD.flatMapToPair(filePath -> {
             List<Tuple2<String, Tuple2<String, List<Integer>>>> termEntries = new ArrayList<>();
             
-            String docId = new File(filePath).getName().replace(".txt", "");
-            JavaRDD<String> lines = sc.textFile(filePath);
-            String content = lines.collect().get(0).toLowerCase().trim();
-            
-            String[] terms = content.split("\\s+");
-            
-            Map<String, List<Integer>> termPositions = new HashMap<>();
-            for (int position = 0; position < terms.length; position++) {
-                String term = terms[position].trim();
-                if (!term.isEmpty()) {
-                    termPositions.computeIfAbsent(term, k -> new ArrayList<>())
-                            .add(position + 1);
+            try {
+                String docId = new File(filePath).getName().replace(".txt", "");
+                
+                // Read file content directly without creating nested RDD
+                java.nio.file.Path path = java.nio.file.Paths.get(filePath);
+                String content = java.nio.file.Files.readString(path).toLowerCase().trim();
+                
+                String[] terms = content.split("\\s+");
+                
+                Map<String, List<Integer>> termPositions = new HashMap<>();
+                for (int position = 0; position < terms.length; position++) {
+                    String term = terms[position].trim();
+                    if (!term.isEmpty()) {
+                        termPositions.computeIfAbsent(term, k -> new ArrayList<>())
+                                .add(position + 1);
+                    }
                 }
-            }
-            
-            for (Map.Entry<String, List<Integer>> entry : termPositions.entrySet()) {
-                termEntries.add(new Tuple2<>(entry.getKey(), new Tuple2<>(docId, entry.getValue())));
+                
+                for (Map.Entry<String, List<Integer>> entry : termPositions.entrySet()) {
+                    termEntries.add(new Tuple2<>(entry.getKey(), new Tuple2<>(docId, entry.getValue())));
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("Error processing file: " + filePath, e);
             }
             
             return termEntries.iterator();
@@ -170,7 +176,7 @@ public class SparkMain implements Serializable {
                                             Map<String, Map<String, List<Integer>>> positionalIndex,
                                             Map<String, Map<String, Double>> tfidfMatrix,
                                             List<String> allDocs) {
-        System.out.println("\nProcessing Query with Spark: \"" + query + "\"");
+        System.out.println("\nProcessing Query: \"" + query + "\"");
         System.out.println("-".repeat(30));
         
         Set<String> resultDocs = evaluateQuery(query, positionalIndex);
@@ -202,7 +208,7 @@ public class SparkMain implements Serializable {
                 .sortBy(tuple -> tuple._2(), false, 1)
                 .collect();
         
-        System.out.println("Matching Documents (ranked by similarity using Spark):");
+        System.out.println("Matching Documents (ranked by similarity):");
         for (int i = 0; i < rankedDocs.size(); i++) {
             Tuple2<String, Double> docScore = rankedDocs.get(i);
             System.out.printf("%d. Doc%s (Score: %.4f)\n", i + 1, docScore._1(), docScore._2());
@@ -211,7 +217,7 @@ public class SparkMain implements Serializable {
     
     // Helper methods (reused from Main class)
     private static void displayPositionalIndex(Map<String, Map<String, List<Integer>>> positionalIndex) {
-        System.out.println("Positional Index (Built with Spark RDDs):");
+        System.out.println("Positional Index:");
         
         positionalIndex.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
@@ -366,7 +372,7 @@ public class SparkMain implements Serializable {
     }
     
     private static Set<String> getDocsContaining(String term, 
-                                               Map<String, Map<String, List<Integer>>> positionalIndex) {
+    Map<String, Map<String, List<Integer>>> positionalIndex) {
         if (positionalIndex.containsKey(term)) {
             return new HashSet<>(positionalIndex.get(term).keySet());
         }
